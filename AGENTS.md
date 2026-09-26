@@ -13,3 +13,12 @@
 
 - This repository is a World of Warcraft addon targeting client interface `12.1.0`.
 - Keep `.vscode/` ignored and out of commits; it is local editor configuration.
+
+## Customization maintenance
+
+- Before changing addon structure, client version, packaging, installation, UI, events, or testing behavior, review the matching files under `.github/instructions/` and `.github/skills/`.
+- Keep skills and instructions synchronized with the actual addon files, TOC metadata, supported client version, commands, and workflows.
+- When a project convention or command changes, update every affected skill or instruction in the same change; remove stale guidance instead of preserving contradictions.
+- Keep skill names, folder names, descriptions, frontmatter, `applyTo` patterns, and referenced script paths valid.
+- After updating a skill or instruction, validate its frontmatter, referenced files, executable scripts, and any affected project behavior.
+- Periodically inspect the customization directories for duplicate, obsolete, or overly broad guidance and consolidate it when appropriate.
