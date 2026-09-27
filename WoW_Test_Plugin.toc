@@ -1,7 +1,0 @@
-## Interface: 120100
-## Title: WoW Test Plugin
-## Notes: Minimal World of Warcraft addon scaffold.
-## Author: WoW Test Plugin
-## Version: 12.1.0
-
-WoW_Test_Plugin.lua

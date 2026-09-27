@@ -17,7 +17,7 @@ Install the current addon package into a local World of Warcraft client without 
 5. Run [install-wow-addon.ps1](./scripts/install-wow-addon.ps1) with `-WhatIf` first when the destination or file set is uncertain.
 6. Run the script without `-WhatIf` to copy the TOC and only the source files listed by it into `<flavor>\Interface\AddOns\<addon-folder>`.
 7. Confirm the destination contains the TOC and every manifest file, then report the exact installed path.
-8. Have the user enable or reload the addon in WoW and verify the load message and `/wptest` command.
+8. Have the user enable or reload the addon in WoW and verify the load message and the absence of Lua errors. This addon scaffold does not currently define a project-specific `/wptest` slash command; the initialization message and default chat log are the relevant verification points.
 
 ## Safety and Failure Handling
 

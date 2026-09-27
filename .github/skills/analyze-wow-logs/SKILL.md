@@ -6,13 +6,13 @@ argument-hint: "Optional log directory or plugin name"
 
 # Analyze WoW Logs
 
-Collect and analyze World of Warcraft text logs for `WoW_Test_Plugin` or another specified addon.
+Collect and analyze World of Warcraft text logs for `MidnightCookingCompletionist` or another specified addon.
 
 ## Procedure
 
 1. Ask the user to close WoW before reading logs if the files may still be written.
 2. Use the Retail log directory `C:\Program Files (x86)\World of Warcraft\_retail_\Logs` by default, or accept an explicit `-LogPath`.
-3. Use `WoW_Test_Plugin` as the default plugin filter, or accept an explicit `-PluginName`.
+3. Use `MidnightCookingCompletionist` as the default plugin filter, or accept an explicit `-PluginName`.
 4. Run [analyze-wow-logs.ps1](./scripts/analyze-wow-logs.ps1) with an output directory outside the game installation.
 5. Review `filtered.log` for all matching plugin lines, `analysis.md` for grouped errors and suggested fixes, and `summary.json` for machine-readable results.
 6. Correlate the report with the relevant Lua or TOC source before proposing a code change.

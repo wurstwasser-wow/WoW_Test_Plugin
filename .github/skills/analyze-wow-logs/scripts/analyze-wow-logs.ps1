@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [string]$LogPath = "C:\Program Files (x86)\World of Warcraft\_retail_\Logs",
-    [string]$PluginName = "WoW_Test_Plugin",
+    [string]$PluginName = "MidnightCookingCompletionist",
     [string]$OutputDirectory = (Join-Path (Get-Location) "artifacts\wow-log-analysis")
 )
 

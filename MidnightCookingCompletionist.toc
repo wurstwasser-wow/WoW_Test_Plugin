@@ -1,0 +1,32 @@
+## Interface: 120100
+## Title: Midnight Cooking Completionist
+## Notes: Architecture scaffold and data model foundation for the Midnight Cooking Completionist addon.
+## Author: WoW Test Plugin
+## Version: 0.1.0
+
+MidnightCookingCompletionist.lua
+MidnightCooking\Core\Constants.lua
+MidnightCooking\Core\Bootstrap.lua
+MidnightCooking\Database\Recipes.lua
+MidnightCooking\Database\Sources.lua
+MidnightCooking\Database\Locations.lua
+MidnightCooking\API\RecipeAPI.lua
+MidnightCooking\API\MapAPI.lua
+MidnightCooking\Systems\CharacterTracker.lua
+MidnightCooking\Systems\RecipeScanner.lua
+MidnightCooking\Systems\SourceResolver.lua
+MidnightCooking\Systems\ZoneAnalyzer.lua
+MidnightCooking\Systems\CompletionEngine.lua
+MidnightCooking\Systems\RoutePlanner.lua
+MidnightCooking\Systems\SearchEngine.lua
+MidnightCooking\Systems\MaterialPlanner.lua
+MidnightCooking\Systems\CharacterComparison.lua
+MidnightCooking\Utils\DataValidator.lua
+MidnightCooking\Utils\DataQuality.lua
+MidnightCooking\UI\Dashboard.lua
+MidnightCooking\UI\RecipeList.lua
+MidnightCooking\UI\MainWindow.lua
+MidnightCooking\Map\WorldMap.lua
+MidnightCooking\Map\Minimap.lua
+MidnightCooking\Map\MarkerCluster.lua
+MidnightCooking\Init.lua

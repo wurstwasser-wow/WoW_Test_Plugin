@@ -1,0 +1,1716 @@
+Gerne. Für einen Senior Entwickler würde ich Phase 2 als **technische User Story mit klaren Akzeptanzkriterien** formulieren. Der Fokus liegt dabei nicht auf UI, sondern auf einer belastbaren Architektur und einem erweiterbaren Datenmodell.
+
+# Phase 2 – Architektur & Datenmodell
+
+## User Story
+
+**Als** Senior WoW Addon Developer / Software Architect  
+**möchte ich** eine robuste, modulare und erweiterbare Architektur sowie ein normalisiertes Datenmodell für das Midnight Cooking Completionist Addon implementieren,  
+**damit** Rezeptdaten, Quellen, Fundorte, Spielerfortschritt, Kartenmarker und spätere Funktionen wie Materialplanung oder Routenplanung unabhängig voneinander erweitert und gewartet werden können.
+
+---
+
+# Ziel
+
+Phase 2 bildet das technische Fundament des Addons.
+
+Die Architektur muss insbesondere folgende Anforderungen unterstützen:
+
+- vollständige Verwaltung von Cooking-Rezepten
+- Unterscheidung zwischen gelernt, fehlend, unbekannt und nicht verfügbar
+- mehrere Quellen pro Rezept
+- unterschiedliche Quellentypen
+- geografische und nicht-geografische Quellen
+- World-Map- und Minimap-Integration
+- Zusammenfassung mehrerer Rezepte an einem Fundort
+- Materialplanung
+- Zonen- und Quellen-Statistiken
+- Charakter- und Account-Tracking
+- spätere Erweiterung auf andere Berufe
+- möglichst geringe Abhängigkeit einzelner Module von der Blizzard API
+
+Die Architektur soll nach dem Prinzip **"Daten → Logik → Darstellung"** aufgebaut werden.
+
+---
+
+# Architekturprinzip
+
+Die Anwendung soll logisch in folgende Schichten aufgeteilt werden:
+
+```text
+Blizzard WoW API
+        ↓
+API Abstraction Layer
+        ↓
+Normalized Data Model
+        ↓
+Systems / Business Logic
+        ↓
+Presentation Layer
+        ↓
+UI / World Map / Minimap / Tooltip
+```
+
+### Grundregel
+
+Kein UI-Modul darf direkt auf Blizzard-APIs wie `C_TradeSkillUI`, `C_Map` etc. zugreifen.
+
+Stattdessen müssen Blizzard-API-Aufrufe über dedizierte Wrapper/Adapter erfolgen.
+
+Beispiel:
+
+```lua
+MC.API.Recipe:GetSchematic(recipeID)
+MC.API.Recipe:GetRequirements(recipeID)
+MC.API.Map:SetWaypoint(location)
+```
+
+Dadurch sollen zukünftige API-Änderungen möglichst auf wenige Module begrenzt werden.
+
+---
+
+# Anforderungen
+
+## 1. Recipe Entity
+
+Es muss ein normalisiertes Rezeptmodell existieren.
+
+Beispiel:
+
+```lua
+Recipe = {
+    recipeID = 123456,
+    spellID = 789012,
+    skillLineAbilityID = 345678,
+
+    name = "Example Recipe",
+    icon = 123456,
+
+    profession = {
+        skillLineID = 185,
+        name = "Cooking"
+    },
+
+    expansion = "Midnight",
+
+    category = {
+        id = nil,
+        name = nil
+    },
+
+    playerState = {
+        learned = false,
+        status = "MISSING"
+    },
+
+    result = {
+        itemID = 123456,
+        quantityMin = 1,
+        quantityMax = 1
+    },
+
+    reagents = {},
+    requirements = {},
+    sources = {},
+
+    dataQuality = {
+        verified = true,
+        sourceVerified = true,
+        locationVerified = true
+    }
+}
+```
+
+Dabei müssen mindestens folgende IDs getrennt behandelt werden:
+
+- `recipeID`
+- `spellID`
+- `skillLineAbilityID`
+- `itemID`
+
+Die Implementierung darf nicht davon ausgehen, dass diese IDs identisch sind.
+
+---
+
+# 2. Runtime Recipe Data
+
+Dynamische Daten, die direkt aus dem Spiel ermittelt werden, müssen von statischen Daten getrennt bleiben.
+
+Beispiel:
+
+```lua
+RuntimeRecipe = {
+    recipeID = 123456,
+    learned = true,
+    schematic = {},
+    requirements = {},
+    sourceText = "",
+    lastUpdated = 1234567890
+}
+```
+
+Die Runtime-Daten repräsentieren den aktuellen Charakterzustand.
+
+Statische Informationen wie Quellen, NPCs und bekannte Fundorte dürfen nicht unnötig in den Runtime-State kopiert werden.
+
+---
+
+# 3. Reagent Model
+
+Reagenzien müssen als eigenständige Datenstruktur behandelt werden.
+
+```lua
+Reagent = {
+    itemID = 123456,
+    quantity = 5,
+    type = "BASIC",
+    required = true,
+    variableQuantity = false
+}
+```
+
+Das Modell muss insbesondere variable Reagenzmengen unterstützen.
+
+---
+
+# 4. Source Entity
+
+Ein Rezept kann eine oder mehrere Quellen besitzen.
+
+Beispiel:
+
+```lua
+Source = {
+    sourceID = "vendor:12345",
+
+    type = "VENDOR",
+
+    name = "Example NPC",
+
+    npcID = 12345,
+
+    location = {
+        mapID = 123,
+        x = 0.524,
+        y = 0.387
+    },
+
+    requirements = {},
+
+    verified = true
+}
+```
+
+Die Source-Struktur darf nicht ausschließlich auf NPC-Verkäufer ausgelegt sein.
+
+Folgende Source Types müssen unterstützt werden:
+
+```lua
+SOURCE_TYPES = {
+    VENDOR,
+    QUEST,
+    DROP,
+    TREASURE,
+    REPUTATION,
+    TRAINER,
+    ACHIEVEMENT,
+    EVENT,
+    WORLD_QUEST,
+    RARE,
+    DUNGEON,
+    RAID,
+    DELVE,
+    WORLD_BOSS,
+    DISCOVERY,
+    PROFESSION,
+    SPECIAL,
+    OTHER
+}
+```
+
+Das Modell muss problemlos um weitere Source Types erweitert werden können.
+
+---
+
+# 5. Multiple Sources
+
+Ein Rezept muss beliebig viele Quellen besitzen können.
+
+Beispiel:
+
+```lua
+recipe.sources = {
+    "vendor:12345",
+    "quest:45678",
+    "drop:98765"
+}
+```
+
+Die eigentlichen Source-Daten werden zentral verwaltet:
+
+```lua
+Sources = {
+    ["vendor:12345"] = {},
+    ["quest:45678"] = {},
+    ["drop:98765"] = {}
+}
+```
+
+Damit werden redundante Daten vermieden.
+
+---
+
+# 6. Location Entity
+
+Geografische Informationen müssen unabhängig von Sources behandelt werden.
+
+```lua
+Location = {
+    mapID = 123,
+    x = 0.524,
+    y = 0.387,
+
+    zoneName = "Example Zone",
+    subZoneName = "Example Subzone",
+
+    verified = true
+}
+```
+
+Eine Source darf auch **keinen geografischen Standort** besitzen.
+
+Beispiele:
+
+- Achievement
+- Reputation
+- Discovery
+- bestimmte Drops
+- sonstige nicht eindeutig lokalisierbare Quellen
+
+Diese Quellen müssen trotzdem vollständig im Addon dargestellt werden.
+
+---
+
+# 7. Recipe Status
+
+Der Status eines Rezeptes darf nicht ausschließlich als Boolean gespeichert werden.
+
+Folgende Zustände müssen unterstützt werden:
+
+```lua
+RECIPE_STATUS = {
+    LEARNED,
+    MISSING,
+    UNKNOWN,
+    UNAVAILABLE
+}
+```
+
+Insbesondere gilt:
+
+```text
+UNKNOWN ≠ MISSING
+```
+
+Wenn das Addon den Zustand eines Rezeptes nicht zuverlässig bestimmen kann, darf es dieses nicht automatisch als fehlend markieren.
+
+---
+
+# 8. Completion Engine
+
+Es muss eine zentrale Completion Engine geben.
+
+Input:
+
+```text
+Recipe Database
++
+Current Character Recipe State
+```
+
+Output:
+
+```lua
+CompletionResult = {
+    total = 213,
+    learned = 147,
+    missing = 66,
+    unknown = 0,
+    percentage = 69.01,
+
+    zoneStats = {},
+    sourceStats = {}
+}
+```
+
+Die Completion Engine darf nicht an eine bestimmte UI gebunden sein.
+
+Dies ermöglicht die Verwendung derselben Logik für:
+
+- Dashboard
+- Recipe List
+- World Map
+- Minimap
+- Tooltips
+- Zone Completion
+- Character Comparison
+- Planner
+
+---
+
+# 9. Zone Statistics
+
+Das System muss Rezeptfortschritt nach Zone aggregieren können.
+
+Beispiel:
+
+```lua
+ZoneStats = {
+    [123] = {
+        mapID = 123,
+
+        totalRecipes = 18,
+        learned = 12,
+        missing = 6,
+
+        locations = 4
+    }
+}
+```
+
+Damit muss später beispielsweise eine Funktion wie
+
+```text
+"What am I missing in this zone?"
+```
+
+implementierbar sein.
+
+---
+
+# 10. Source Statistics
+
+Der Fortschritt muss ebenfalls pro Quelle aggregierbar sein.
+
+Beispiel:
+
+```lua
+SourceStats = {
+    ["vendor:12345"] = {
+        total = 8,
+        learned = 3,
+        missing = 5
+    }
+}
+```
+
+Dadurch kann das UI beispielsweise anzeigen:
+
+```text
+Example NPC
+3 / 8 learned
+5 missing
+```
+
+---
+
+# 11. Map Marker Model
+
+Map Marker dürfen nicht direkt an einzelne Rezepte gekoppelt werden.
+
+Stattdessen muss ein Marker einen geografischen Ort repräsentieren.
+
+Beispiel:
+
+```lua
+MapMarker = {
+    markerID = "location:123:0.524:0.387",
+
+    location = {
+        mapID = 123,
+        x = 0.524,
+        y = 0.387
+    },
+
+    sources = {
+        "vendor:12345",
+        "quest:45678"
+    },
+
+    missingRecipes = {
+        123456,
+        234567,
+        345678
+    },
+
+    count = 3
+}
+```
+
+Wenn mehrere fehlende Rezepte am selben Ort verfügbar sind, soll nur **ein Marker** erzeugt werden.
+
+Der Marker muss beim Öffnen/Interagieren die zugehörigen fehlenden Rezepte anzeigen können.
+
+---
+
+# 12. Marker Clustering
+
+Das Markersystem muss grundsätzlich zwei Ebenen unterstützen:
+
+### Exact Location Grouping
+
+Identische Koordinaten werden zu einem Marker zusammengefasst.
+
+### Spatial Clustering
+
+Nahe beieinanderliegende Orte können abhängig von Zoom-Level und Kartenansicht zusammengefasst werden.
+
+Das Clustering darf nicht Bestandteil der Recipe-Datenbank sein.
+
+Es gehört in eine eigenständige Map-/Marker-Komponente.
+
+---
+
+# 13. Material Planner
+
+Das Datenmodell muss spätere Materialplanung ermöglichen.
+
+Input:
+
+```text
+Selected Recipes
+```
+
+Output:
+
+```text
+Required Reagents
++
+Owned Reagents
+=
+Missing Reagents
+```
+
+Beispiel:
+
+```lua
+ShoppingList = {
+    [111111] = {
+        required = 42,
+        owned = 17,
+        missing = 25
+    }
+}
+```
+
+Die Materialberechnung muss von der UI unabhängig sein.
+
+---
+
+# 14. Character / Account Tracking
+
+Das Addon soll mehrere Charaktere verwalten können.
+
+Beispiel:
+
+```lua
+AccountDB = {
+    characters = {
+        ["Character-Realm"] = {
+            name = "Character",
+            realm = "Realm",
+
+            recipes = {
+                [123456] = true,
+                [234567] = true
+            },
+
+            lastScan = 1234567890
+        }
+    }
+}
+```
+
+Dabei gilt:
+
+**Live-Daten des aktuellen Charakters sind die primäre Wahrheit.**
+
+SavedVariables dienen für:
+
+- historische Daten
+- andere Charaktere
+- Account-Vergleiche
+- Caching
+
+---
+
+# 15. Search Index
+
+Das System soll einen zentralen Suchindex besitzen.
+
+```lua
+SearchIndex = {
+    recipeName = {},
+    itemName = {},
+    npcName = {},
+    questName = {},
+    zoneName = {},
+    reagentName = {}
+}
+```
+
+Die Suche muss später unter anderem ermöglichen:
+
+```text
+Recipe Name
+Item Name
+NPC
+Quest
+Zone
+Reagent
+Source Type
+```
+
+Die Suchlogik darf nicht direkt an die UI gekoppelt werden.
+
+---
+
+# 16. Route Planner Vorbereitung
+
+Die Architektur muss spätere Routenplanung ermöglichen.
+
+Dafür müssen folgende Informationen verfügbar sein:
+
+```text
+Missing Recipes
+        ↓
+Geographic Sources
+        ↓
+Map
+        ↓
+Locations
+        ↓
+Collection Order
+```
+
+Wenn keine echte Routing-Berechnung implementiert wird, darf die Funktion später nicht als „optimal route“ bezeichnet werden.
+
+Dafür ist die Bezeichnung:
+
+```text
+Suggested Collection Order
+```
+
+vorgesehen.
+
+---
+
+# 17. Data Quality
+
+Statische Daten müssen überprüfbar sein.
+
+Beispiel:
+
+```lua
+dataQuality = {
+    verified = true,
+
+    recipeVerified = true,
+    sourceVerified = true,
+    locationVerified = true,
+
+    lastVerified = "12.0.1",
+    origin = "STATIC_DATABASE"
+}
+```
+
+Die Architektur muss fehlerhafte oder unvollständige Daten erkennen können.
+
+Beispiele:
+
+```text
+Recipe ohne Source
+Source ohne validen Source Type
+Location ohne mapID
+Location mit ungültigen Koordinaten
+Source ohne Recipe
+Recipe mit unbekanntem Status
+```
+
+Diese Fälle dürfen nicht stillschweigend ignoriert werden.
+
+---
+
+# 18. Datenbankstruktur
+
+Statische Daten sollen logisch getrennt werden.
+
+Empfohlene Struktur:
+
+```text
+Database/
+├── Recipes.lua
+├── Sources.lua
+├── Locations.lua
+└── DatabaseVersion.lua
+```
+
+Die Rezeptdaten sollen nicht sämtliche Source- und Location-Informationen redundant enthalten.
+
+---
+
+# 19. API-Abstraktion
+
+Alle Blizzard-API-Aufrufe müssen über Wrapper laufen.
+
+Beispiel:
+
+```lua
+MC.API.Recipe:GetSchematic(recipeID)
+MC.API.Recipe:GetRequirements(recipeID)
+MC.API.Recipe:GetSourceText(recipeID)
+```
+
+und:
+
+```lua
+MC.API.Map:SetWaypoint(location)
+MC.API.Map:ClearWaypoint()
+MC.API.Map:GetCurrentWaypoint()
+```
+
+Dadurch soll eine spätere Änderung der Blizzard API möglichst lokal behandelt werden können.
+
+---
+
+# 20. Modulstruktur
+
+Die Architektur soll mindestens folgende logische Bereiche vorsehen:
+
+```text
+MidnightCooking/
+│
+├── Core/
+│   ├── Bootstrap.lua
+│   ├── Constants.lua
+│   ├── Events.lua
+│   └── Debug.lua
+│
+├── Database/
+│   ├── Recipes.lua
+│   ├── Sources.lua
+│   ├── Locations.lua
+│   └── DatabaseVersion.lua
+│
+├── API/
+│   ├── ProfessionAPI.lua
+│   ├── RecipeAPI.lua
+│   ├── MapAPI.lua
+│   ├── TooltipAPI.lua
+│   └── WaypointAPI.lua
+│
+├── Systems/
+│   ├── RecipeScanner.lua
+│   ├── CompletionEngine.lua
+│   ├── SourceResolver.lua
+│   ├── ZoneAnalyzer.lua
+│   ├── SearchEngine.lua
+│   ├── MaterialPlanner.lua
+│   ├── RoutePlanner.lua
+│   └── CharacterTracker.lua
+│
+├── Map/
+│   ├── WorldMap.lua
+│   ├── Minimap.lua
+│   └── MarkerCluster.lua
+│
+├── UI/
+│   ├── MainWindow.lua
+│   ├── Dashboard.lua
+│   ├── RecipeList.lua
+│   ├── RecipeDetails.lua
+│   ├── SourceDetails.lua
+│   ├── Search.lua
+│   ├── Planner.lua
+│   ├── ShoppingList.lua
+│   ├── CharacterComparison.lua
+│   └── Settings.lua
+│
+├── Tooltip/
+│   └── RecipeTooltip.lua
+│
+└── Utils/
+    ├── DataUtils.lua
+    ├── TableUtils.lua
+    └── StringUtils.lua
+```
+
+Die konkrete Dateistruktur darf vom Entwickler angepasst werden, sofern die beschriebenen Verantwortlichkeiten sauber getrennt bleiben.
+
+---
+
+# Technische Qualitätsanforderungen
+
+Der Senior Developer muss insbesondere auf folgende Punkte achten:
+
+### Separation of Concerns
+
+Daten, API-Zugriff, Business Logic und UI dürfen nicht vermischt werden.
+
+### Erweiterbarkeit
+
+Die Architektur muss später weitere Berufe unterstützen können, ohne das gesamte System neu zu schreiben.
+
+### Performance
+
+- keine unnötigen `OnUpdate`-Handler
+- Event-basierte Aktualisierung
+- Caching
+- Lazy Loading, wo sinnvoll
+- effizientes Marker-Clustering
+- keine wiederholte Berechnung unveränderter Daten
+
+### API-Sicherheit
+
+WoW-APIs müssen gegen fehlende Daten und API-Änderungen abgesichert werden.
+
+### Fehlerbehandlung
+
+Ein fehlendes API-Ergebnis darf nicht automatisch zu falschen Completion-Daten führen.
+
+### Testbarkeit
+
+Business-Logik soll möglichst ohne UI getestet werden können.
+
+---
+
+# Akzeptanzkriterien
+
+## AC1 – Architektur
+
+- [ ] Es existiert eine klare Trennung zwischen API, Daten, Business Logic und UI.
+- [ ] UI-Module greifen nicht direkt auf Blizzard APIs zu.
+- [ ] API-Zugriffe laufen über definierte Wrapper.
+
+## AC2 – Rezeptmodell
+
+- [ ] Rezepte besitzen ein normalisiertes Datenmodell.
+- [ ] `recipeID`, `spellID`, `skillLineAbilityID` und `itemID` werden getrennt behandelt.
+- [ ] Reagenzien und Result Items sind modelliert.
+- [ ] Runtime-Daten sind von statischen Daten getrennt.
+
+## AC3 – Quellen
+
+- [ ] Ein Rezept kann mehrere Quellen besitzen.
+- [ ] Unterschiedliche Source Types werden unterstützt.
+- [ ] Quellen können geografisch oder nicht-geografisch sein.
+- [ ] Source-Daten werden zentral referenziert.
+
+## AC4 – Locations
+
+- [ ] Locations besitzen Map-ID und Koordinaten.
+- [ ] Quellen ohne Location sind zulässig.
+- [ ] Locations sind unabhängig vom Rezeptmodell modelliert.
+
+## AC5 – Completion
+
+- [ ] `LEARNED`, `MISSING`, `UNKNOWN` und `UNAVAILABLE` werden unterschieden.
+- [ ] Die Completion Engine liefert Gesamtstatistiken.
+- [ ] Zone- und Source-Statistiken können berechnet werden.
+- [ ] `UNKNOWN` wird nicht automatisch als `MISSING` behandelt.
+
+## AC6 – Map
+
+- [ ] Mehrere Rezepte am gleichen Ort können in einem Marker zusammengefasst werden.
+- [ ] Marker enthalten die zugehörigen fehlenden Rezepte.
+- [ ] Marker-Clustering ist von der Rezeptdatenbank getrennt.
+
+## AC7 – Planner
+
+- [ ] Reagenzien können für mehrere ausgewählte Rezepte aggregiert werden.
+- [ ] Required, Owned und Missing Materials können dargestellt werden.
+- [ ] Die Architektur unterstützt spätere Collection-/Route-Planung.
+
+## AC8 – Character Tracking
+
+- [ ] Der aktuelle Charakter kann gescannt werden.
+- [ ] Rezeptstatus kann gespeichert werden.
+- [ ] Mehrere Charaktere können getrennt verwaltet werden.
+- [ ] Live-Daten des aktuellen Charakters haben Vorrang vor gespeicherten Cache-Daten.
+
+## AC9 – Data Quality
+
+- [ ] Statische Daten können als verifiziert/nicht verifiziert gekennzeichnet werden.
+- [ ] Ungültige oder unvollständige Daten können erkannt werden.
+- [ ] Datenbankversionierung ist vorgesehen.
+
+## AC10 – Erweiterbarkeit
+
+- [ ] Die Architektur ist nicht hart auf Vendor-Rezepte ausgelegt.
+- [ ] Neue Source Types können ohne Umbau des gesamten Systems ergänzt werden.
+- [ ] Weitere Berufe können perspektivisch unterstützt werden.
+
+---
+
+# Definition of Done
+
+Phase 2 ist abgeschlossen, wenn:
+
+1. das Datenmodell vollständig definiert ist;
+2. die Verantwortlichkeiten aller Kernmodule festgelegt sind;
+3. die API-Abstraktionsschicht definiert ist;
+4. Rezept-, Source-, Location- und Reagent-Modelle implementierbar spezifiziert sind;
+5. die Completion Engine als eigenständiges System spezifiziert ist;
+6. Map Marker und Clustering architektonisch getrennt sind;
+7. Material- und Character-Tracking berücksichtigt sind;
+8. Datenqualität und Datenbankversionierung vorgesehen sind;
+9. keine zentrale Funktion direkt von UI-Code abhängig ist;
+10. die Architektur später um weitere Berufe erweitert werden kann.
+
+**Wichtig:** In dieser Phase steht die technische Grundlage im Vordergrund. Die Implementierung konkreter Midnight-Rezeptdaten, vollständiger UI-Elemente und finaler Map-Integration gehört in die nachfolgenden Phasen.
+
+Damit kann ein Senior Developer Phase 2 tatsächlich als **Architektur-/Technical-Story** abarbeiten und anschließend in konkrete Tickets für Phase 3 zerlegen.
+
+---
+
+# Phase 2 – Umsetzungskontrakte und Modul-Interfaces
+
+Die Phase 2-Architektur ist nur dann „fertig“, wenn sie nicht nur abstrakt beschrieben ist, sondern in klare Modul-Interfaces und Dateninvarianten übersetzt wurde. Das ist die Brücke von der Technik-Story zur Implementierung in Lua.
+
+## 1. Domänenregeln und Invarianten
+
+Die Architektur muss die folgenden Grundregeln garantieren:
+
+- Ein Rezept darf niemals als „missing“ gelten, nur weil sein Status aus dem Spiel nicht verifiziert werden konnte.
+- Ein Datensatz darf nur dann eine Location enthalten, wenn die Koordinaten als gültig und konsistent gelten.
+- Eine Source darf ohne Location existieren; eine Location darf nicht zwingend an eine Source gebunden sein.
+- Die aktiven Live-Daten des aktuellen Charakters haben Vorrang vor gespeicherten Cache-Daten.
+- API-Calls müssen durch Wrapper erfolgen; UI-Module dürfen keine direkten Blizzard-Calls enthalten.
+- Der Completion-Engine-Output muss vollständig aus Rechnungslogik und Datenmodellen erzeugt werden und darf niemals aus UI-Status abgeleitet sein.
+
+### Grundlegende Invarianten
+
+```lua
+-- Rezept darf nicht ohne gültige Identität existieren
+assert(recipe.recipeID ~= nil)
+assert(recipe.name ~= nil and recipe.name ~= "")
+
+-- Status darf nicht implizit zwischen Zuständen übersetzen
+-- UNKNOWN != MISSING
+
+-- Location muss mapID + gültige Koordinaten haben, falls vorhanden
+if location ~= nil then
+    assert(location.mapID ~= nil)
+    assert(type(location.x) == "number")
+    assert(type(location.y) == "number")
+end
+
+-- Source muss einen gültigen Typ haben
+assert(SourceTypes[ source.type ] == true)
+```
+
+---
+
+## 2. Kernstruktur: Addon-Container und Bootstrap
+
+Die erste Lua-Klasse/Module muss das Addon registrieren, Konstanten definieren und den Lebenszyklus starten.
+
+```lua
+local MC = {}
+MC.name = "MidnightCookingCompletionist"
+MC.version = "0.1.0"
+MC.clientVersion = "12.1.0"
+
+MC.DB = {}
+MC.API = {}
+MC.Systems = {}
+MC.Map = {}
+MC.UI = {}
+MC.Utils = {}
+MC.Config = {}
+```
+
+### Bootstrap-Verantwortlichkeiten
+
+`Core/Bootstrap.lua` muss mindestens folgende Aufgaben übernehmen:
+
+- initiale Registrierung des Addons
+- Initialisierung der SavedVariables-Strukturen
+- Aufbau der globalen Tabellen
+- Event-Registrierung für Login, Reload, Profession-Updates und Map-Changes
+- Abgleichen zwischen Live-State und SavedVariables
+- Starten der Data-Validation-Checks
+
+### Event-Lebenszyklus
+
+```lua
+MC.Events:Register("PLAYER_LOGIN", "MC:OnPlayerLogin")
+MC.Events:Register("TRADE_SKILL_LIST_UPDATE", "MC:OnTradeSkillListUpdate")
+MC.Events:Register("SKILL_LINES_CHANGED", "MC:OnSkillLinesChanged")
+MC.Events:Register("PLAYER_LOGOUT", "MC:OnPlayerLogout")
+MC.Events:Register("ZONE_CHANGED_NEW_AREA", "MC:OnZoneChanged")
+```
+
+**Regel:** Nur das Event- bzw. Bootstrap-Modul darf globale Events regeln. Keine UI-Datei darf eigene `RegisterEvent`-Aufrufe enthalten.
+
+---
+
+## 3. Modul-Kontrakte
+
+### 3.1 Core/Constants.lua
+
+Ziel: zentrale, unveränderbare Definitionen.
+
+```lua
+MC.Constants = {
+    RECIPE_STATUS = {
+        LEARNED = "LEARNED",
+        MISSING = "MISSING",
+        UNKNOWN = "UNKNOWN",
+        UNAVAILABLE = "UNAVAILABLE"
+    },
+
+    SOURCE_TYPES = {
+        VENDOR = "VENDOR",
+        QUEST = "QUEST",
+        DROP = "DROP",
+        TREASURE = "TREASURE",
+        REPUTATION = "REPUTATION",
+        TRAINER = "TRAINER",
+        ACHIEVEMENT = "ACHIEVEMENT",
+        EVENT = "EVENT",
+        WORLD_QUEST = "WORLD_QUEST",
+        RARE = "RARE",
+        DUNGEON = "DUNGEON",
+        RAID = "RAID",
+        DELVE = "DELVE",
+        WORLD_BOSS = "WORLD_BOSS",
+        DISCOVERY = "DISCOVERY",
+        PROFESSION = "PROFESSION",
+        SPECIAL = "SPECIAL",
+        OTHER = "OTHER"
+    }
+}
+```
+
+### 3.2 Database/Recipes.lua
+
+Verantwortung: statische Rezeptbasis und Kombination mit Runtime-Status.
+
+```lua
+MC.Database.Recipes = {
+    [123456] = {
+        recipeID = 123456,
+        spellID = 789012,
+        skillLineAbilityID = 345678,
+        name = "Example Recipe",
+        profession = {
+            skillLineID = 185,
+            name = "Cooking"
+        },
+        result = {
+            itemID = 135791,
+            quantityMin = 1,
+            quantityMax = 1
+        },
+        sources = {
+            "vendor:12345",
+            "quest:45678"
+        },
+        status = "UNKNOWN",
+        dataQuality = {
+            verified = true,
+            sourceVerified = true,
+            locationVerified = true
+        }
+    }
+}
+```
+
+**Regel:** Keine Rezeptdatenbank darf rohe UI-Informationen enthalten. Nur Datenmodell + verifizierte Metadaten.
+
+### 3.3 Database/Sources.lua
+
+Verantwortung: Zentralisierung aller Source-Objekte, ohne Redundanzen im Rezeptdatensatz.
+
+```lua
+MC.Database.Sources = {
+    ["vendor:12345"] = {
+        sourceID = "vendor:12345",
+        type = "VENDOR",
+        name = "Example NPC",
+        npcID = 12345,
+        location = {
+            mapID = 123,
+            x = 0.524,
+            y = 0.387
+        },
+        requirements = {},
+        verified = true
+    },
+
+    ["quest:45678"] = {
+        sourceID = "quest:45678",
+        type = "QUEST",
+        name = "Example Quest",
+        questID = 45678,
+        verified = true
+    }
+}
+```
+
+### 3.4 Database/Locations.lua
+
+Verantwortung: Geografie als eigenständiges Modell, unabhängig von Recipes und Sources.
+
+```lua
+MC.Database.Locations = {
+    ["location:123:0.524:0.387"] = {
+        mapID = 123,
+        x = 0.524,
+        y = 0.387,
+        zoneName = "Example Zone",
+        subZoneName = "Example Subzone",
+        verified = true
+    }
+}
+```
+
+### 3.5 API-Abstraktion
+
+Die API-Schicht darf nur Daten aus Blizzard und den eigenen Wrappers bereitstellen. UI darf nicht direkt auf `C_TradeSkillUI` oder `C_Map` zugreifen.
+
+```lua
+MC.API.Recipe = {}
+function MC.API.Recipe:GetSchematic(recipeID) end
+function MC.API.Recipe:GetRequirements(recipeID) end
+function MC.API.Recipe:GetSourceText(recipeID) end
+function MC.API.Recipe:GetRecipeState(recipeID) end
+
+MC.API.Map = {}
+function MC.API.Map:SetWaypoint(location) end
+function MC.API.Map:ClearWaypoint() end
+function MC.API.Map:GetCurrentWaypoint() end
+```
+
+**Wichtig:** Jeder Wrapper muss fehlende Daten, API-Fehler und `nil`-Ergebnisse sauber behandeln. Ein fehlendes Ergebnis ist kein Beleg für `MISSING`.
+
+---
+
+## 4. System-Contracte
+
+### 4.1 RecipeScanner
+
+Verantwortung: Live-Scan des aktuellen Charakters und Vergleich mit statischer Datenbasis.
+
+```lua
+MC.Systems.RecipeScanner:ScanCharacter()
+MC.Systems.RecipeScanner:GetLearnedRecipes()
+MC.Systems.RecipeScanner:GetRecipeRuntimeState(recipeID)
+```
+
+**Ergebnis:**
+
+- aktuelle Rezeptliste des Charakters
+- Lernstatus pro Rezept
+- Zeitstempel der letzten Aktualisierung
+- Dynamik für Cache/Save-Mechanik
+
+### 4.2 CompletionEngine
+
+Verantwortung: Berechnung der Gesamtfortschritt-Statistiken anhand von Rezeptdatenbank + Charakterzustand.
+
+```lua
+local result = MC.Systems.CompletionEngine:Compute({
+    recipeDB = MC.Database.Recipes,
+    characterRecipes = MC.DB.Account.characters[characterKey].recipes
+})
+```
+
+Erwartetes Ergebnis:
+
+```lua
+{
+    total = 213,
+    learned = 147,
+    missing = 66,
+    unknown = 0,
+    percentage = 69.01,
+    zoneStats = {},
+    sourceStats = {}
+}
+```
+
+**Verbote:**
+
+- kein Einfügen von UI-Logik in die Engine
+- kein direkter Zugriff auf Karten-Frames
+- kein implizites Umschreiben von `UNKNOWN` auf `MISSING`
+
+### 4.3 SourceResolver
+
+Verantwortung: Auflösung einer Source-ID zu einem echten Source-Objekt, gegebenenfalls mit Location-Anbindung.
+
+```lua
+local source = MC.Systems.SourceResolver:GetSource("vendor:12345")
+local recipes = MC.Systems.SourceResolver:GetRecipesForSource("vendor:12345")
+```
+
+### 4.4 ZoneAnalyzer
+
+Verantwortung: Aggregation nach Zone, Region und Gebiet.
+
+```lua
+local stats = MC.Systems.ZoneAnalyzer:GetZoneStats()
+```
+
+**Ziel:**
+
+- Anzahl Lern-/Fehl-/Unknown-Rezepte pro Zone
+- Auflisten von bereits bekannten/fehlenden Rezepten in einer Zone
+- Grundlage für Map-/Dashboard-Ansichten
+
+### 4.5 SearchEngine
+
+Verantwortung: zentraler Index für Rezeptsuche und Filterung.
+
+```lua
+MC.Systems.SearchEngine:IndexRecipe(recipe)
+MC.Systems.SearchEngine:Search("Tomate")
+MC.Systems.SearchEngine:SearchBySourceType("VENDOR")
+```
+
+### 4.6 MaterialPlanner
+
+Verantwortung: Aggregation von Rezeptmaterialien über mehrere ausgewählte Rezepte.
+
+```lua
+local shopping = MC.Systems.MaterialPlanner:BuildShoppingList({123456, 234567})
+```
+
+Erwartung:
+
+```lua
+{
+    [111111] = {
+        required = 42,
+        owned = 17,
+        missing = 25
+    }
+}
+```
+
+### 4.7 CharacterTracker
+
+Verantwortung: verwaltet Charakter- und Account-Daten mit Last-Scan und Priorisierung.
+
+```lua
+MC.Systems.CharacterTracker:ScanCurrentCharacter()
+MC.Systems.CharacterTracker:SetCharacterData(name, realm, recipes)
+MC.Systems.CharacterTracker:GetCurrentCharacterKey()
+```
+
+**Priorität:**
+
+1. Laufende Live-Daten des aktuellen Charakters
+2. gespeicherte Account-Daten
+3. historische Caches ohne Live-Gültigkeit
+
+---
+
+## 5. Map- und Marker-Konzepte
+
+### 5.1 Location / Marker Trennung
+
+Marker dürfen nicht direkt an Rezeptdaten gebunden sein. Sie repräsentieren nur geografische Aggregate.
+
+```lua
+MC.Map.Marker = {
+    markerID = "location:123:0.524:0.387",
+    location = {
+        mapID = 123,
+        x = 0.524,
+        y = 0.387
+    },
+    sources = {
+        "vendor:12345",
+        "quest:45678"
+    },
+    missingRecipes = {
+        123456,
+        234567
+    },
+    count = 2
+}
+```
+
+### 5.2 Marker-Clustering
+
+Dieses Verhalten gehört in ein separates Map-System, nicht in die Datenbank.
+
+```lua
+MC.Map.MarkerCluster:BuildClusters(markers, zoomLevel, mapID)
+MC.Map.MarkerCluster:GetVisibleMarkers()
+```
+
+**Ziel:**
+
+- gleiche Koordinaten zu einem Marker zusammenfassen
+- nahe beieinanderliegende Marker nach Zoom-Level zusammenfassen
+- keine Mischung aus Cluster-Logik und Rezeptdatenbank
+
+---
+
+## 6. UI-Abgrenzung und Verantwortlichkeiten
+
+Die UI darf nur Daten und Events konsumieren, aber keine Berechnungen oder Blizzard-APIs direkt verwalten.
+
+### Zulässig in UI
+
+- Darstellung von Daten
+- User-Input-Handling
+- Aufrufen von System-Methoden
+- Aktualisieren von Frames, Buttons, Panels
+
+### Nicht zulässig in UI
+
+- `C_TradeSkillUI`-Zugriffe
+- direkte `C_Map`/Waypoint-Logik
+- direkte Statusberechnung
+- direkte Knüpfung von Rezeptdatenbank- und Map-Model
+
+### Beispiel-Rollenaufteilung
+
+```lua
+-- UI
+MC.UI.Dashboard:Refresh(data)
+
+-- System
+local stats = MC.Systems.CompletionEngine:Compute(...)
+
+-- API
+local recipeRuntime = MC.API.Recipe:GetSchematic(recipeID)
+```
+
+---
+
+## 7. Datenqualität und Validierung
+
+Die Architektur muss bei unvollständigen oder inkonsistenten Daten nicht stillschweigend weiterarbeiten.
+
+### Validierungsregeln
+
+```lua
+MC.Utils.DataValidator:ValidateRecipe(recipe)
+MC.Utils.DataValidator:ValidateSource(source)
+MC.Utils.DataValidator:ValidateLocation(location)
+MC.Utils.DataValidator:ValidatePlayerState(state)
+```
+
+Beispiele für Fehler:
+
+- Rezept ohne Source, obwohl die DB für diesen Rezept-Typ erwartet wird
+- Source ohne gültigen Typ
+- Location ohne `mapID`
+- ungültige Koordinaten außerhalb von $[0,1]$ pro Achse
+- `recipe.status` ohne gültige Enum-Konstante
+
+**Wichtig:** Fehler müssen protokolliert oder markiert werden, nicht stillschweigend verworfen.
+
+---
+
+## 8. Dateistruktur für die erste Implementierung
+
+Für die erste produktive Umsetzung sollte die Struktur konkret und sauber begrenzt bleiben:
+
+```text
+MidnightCooking/
+├── Core/
+│   ├── Bootstrap.lua
+│   ├── Constants.lua
+│   ├── Events.lua
+│   └── Debug.lua
+├── Database/
+│   ├── Recipes.lua
+│   ├── Sources.lua
+│   ├── Locations.lua
+│   └── DatabaseVersion.lua
+├── API/
+│   ├── ProfessionAPI.lua
+│   ├── RecipeAPI.lua
+│   ├── MapAPI.lua
+│   ├── TooltipAPI.lua
+│   └── WaypointAPI.lua
+├── Systems/
+│   ├── RecipeScanner.lua
+│   ├── CompletionEngine.lua
+│   ├── SourceResolver.lua
+│   ├── ZoneAnalyzer.lua
+│   ├── SearchEngine.lua
+│   ├── MaterialPlanner.lua
+│   ├── RoutePlanner.lua
+│   └── CharacterTracker.lua
+├── Map/
+│   ├── WorldMap.lua
+│   ├── Minimap.lua
+│   └── MarkerCluster.lua
+├── UI/
+│   ├── MainWindow.lua
+│   ├── Dashboard.lua
+│   ├── RecipeList.lua
+│   ├── RecipeDetails.lua
+│   ├── SourceDetails.lua
+│   ├── Search.lua
+│   ├── Planner.lua
+│   ├── ShoppingList.lua
+│   ├── CharacterComparison.lua
+│   └── Settings.lua
+├── Tooltip/
+│   └── RecipeTooltip.lua
+├── Utils/
+│   ├── DataUtils.lua
+│   ├── TableUtils.lua
+│   └── StringUtils.lua
+└── Init.lua
+```
+
+Diese Struktur ist bewusst modulare und lässt sich in Phase 3 in konkrete Lua-Dateien aufteilen, ohne die Systemgrenzen zu verlieren.
+
+---
+
+## 9. Phase-2-Verifikation und Definition of Ready
+
+Phase 2 ist erst dann als abgeschlossen anzusehen, wenn die folgenden Punkte in der technischen Spezifikation vollständig geklärt sind:
+
+- [ ] Rezept-ID-Modelle sind eindeutig getrennt.
+- [ ] Runtime- und Static-State sind klar getrennt.
+- [ ] Sources und Locations sind eigenständige Modelle.
+- [ ] Completion Engine arbeitet ohne UI-Referenzen.
+- [ ] Map Marker basieren auf Location-Aggregaten, nicht auf Rezepten.
+- [ ] Keine Datei greift direkt auf Blizzard-APIs zu, außer den Wrappers.
+- [ ] Character-Tracking hat definierte Priorität zwischen Live- und SavedVariable-Daten.
+- [ ] Data Quality und Validierung sind vorgesehen.
+- [ ] Erneute Erweiterung auf weitere Berufe oder Source-Types ist ohne Architektur-Umbruch möglich.
+
+---
+
+## 10. Umsetzungsempfehlung für Phase 3
+
+Für Phase 3 sollten die Tickets in dieser Reihenfolge umgesetzt werden:
+
+1. Addon-Container, Bootstrap und Event-Lifecycle
+2. Datenbank-Modelle für Recipes, Sources, Locations
+3. API-Wrapper für Recipe und Map
+4. RecipeScanner + CharacterTracker
+5. CompletionEngine + ZoneAnalyzer + SourceResolver
+6. Marker-/Map-Komponenten
+7. SearchEngine + MaterialPlanner
+8. UI-Dashboard und Rezeptliste
+9. Validation, Debug-Logging und Last-Scan-Mechanik
+
+Damit wird die Architektur nicht nur dokumentiert, sondern auch in ein realisierbares Baukonzept für die erste Implementierung übersetzt.
+
+Diese Erweiterung bildet die vollständige technische Grundlage für Phase 3 und macht die Übergabe an einen Implementierungsteam oder einen einzelnen Senior Developer sauber und verlässlich.
+
+---
+
+# Phase 3 – Feature Architecture und nächste Produktfunktionen
+
+Phase 3 baut auf der Phase-2-Architektur auf und definiert die nächsten produktiven Features als separate, testbare Module. Die Kernidee bleibt unverändert: Daten und Logik werden von der UI und von Blizzard-API-Details getrennt.
+
+## 1. Ziel der Phase 3
+
+Die erste produktive Feature-Schicht soll im Addon die folgenden Bedürfnisse abdecken:
+
+- Routen-/Sammlungsplanung für fehlende Rezepte
+- zentrale Suche über Rezept, Item, Quest, NPC, Source und Zone
+- Materialplanung und Einkaufslisten
+- Charaktervergleich und Account-Delta
+- detaillierte Zone- und Quellenübersichten
+- Versionierung und Datenqualitätskontrolle
+
+Die Implementierung darf keine Feature-Logik direkt in UI-Dateien schreiben. Jede Funktion gehört in ein Systemmodul mit eigenem Interface.
+
+---
+
+## 2. Phase-3-Module und Interfaces
+
+### 2.1 RoutePlanner
+
+**Ziel:**
+Aus einer Menge fehlender Rezepte eine sinnvolle, nicht-optimale Reihenfolge von Sammlungszielen ableiten.
+
+**Interface:**
+
+```lua
+MC.Systems.RoutePlanner:BuildSuggestedOrder(missingRecipes)
+MC.Systems.RoutePlanner:GetCollectionPlan(locationSet)
+```
+
+**Inhalt:**
+
+- fehlende Rezepte aus Completion Engine
+- zugehörige Quellen und Location-Daten ermitteln
+- geographische Sortierung nach Zone / Map / Nähe
+- Ausgabe als „Suggested Collection Order“ statt künstlich behaupteter „optimal route“
+
+**Wichtige Regel:**
+Diese Funktion darf keine blinde Routing-Logik als „optimal“ ausgeben. Nur „Suggested Collection Order“ ist zulässig.
+
+---
+
+### 2.2 SearchEngine
+
+**Ziel:**
+Zentrale Suche über Rezept-, NPC-, Quest-, Item-, Reagenz- und Quellmetadaten.
+
+**Interface:**
+
+```lua
+MC.Systems.SearchEngine:IndexRecipe(recipe)
+MC.Systems.SearchEngine:IndexDatabase(recipeDB)
+MC.Systems.SearchEngine:Search(term, recipeDB)
+MC.Systems.SearchEngine:SearchBySourceType(sourceType)
+```
+
+**Implementierungsanforderung:**
+
+- Namen, IDs und Quellen müssen in einem Index erfasst werden
+- Suche darf nur über Systemlogik und Daten laufen
+- UI darf nur Suchterm und Ergebnisse anzeigen
+
+**Beispiele:**
+
+```lua
+MC.Systems.SearchEngine:Search("Tomate")
+MC.Systems.SearchEngine:SearchBySourceType("VENDOR")
+```
+
+---
+
+### 2.3 MaterialPlanner
+
+**Ziel:**
+Materialien über mehrere Rezepte zusammenfassen und Missing-Items berechnen.
+
+**Interface:**
+
+```lua
+MC.Systems.MaterialPlanner:BuildShoppingList(selectedRecipes, ownedItems)
+```
+
+**Erwartung:**
+
+```lua
+{
+    [111111] = {
+        required = 42,
+        owned = 17,
+        missing = 25,
+    }
+}
+```
+
+**Wichtige Logik:**
+
+- Reagenzien mehrerer Rezepte summieren
+- ownedItems aus Inventar- oder Charakterdaten übernehmen
+- UI darf nur diese Aggregation anzeigen, aber keine Berechnung enthalten
+
+---
+
+### 2.4 CharacterComparison
+
+**Ziel:**
+Vergleich verschiedener Charaktere oder Accountdaten.
+
+**Interface:**
+
+```lua
+MC.Systems.CharacterComparison:Compare(characterA, characterB)
+MC.Systems.CharacterComparison:GetDelta(recipeDB, sourceDB)
+```
+
+**Verantwortung:**
+
+- Summaries pro Charakter
+- Unterschiede in Lernstatus
+- Vergleich zwischen aktueller Live-Sicht und gespeicherten Daten
+
+**Wichtige Regel:**
+Die Vergleichslogik muss auf denselben Systemdaten wie der Completion Engine arbeiten und darf keine UI-abhängigen Daten verwenden.
+
+---
+
+### 2.5 ZoneAnalyzer und SourceResolver
+
+**Ziel:**
+Erweiterung der Analyse nach Zone und Quelle.
+
+**Verantwortung:**
+
+- Source-Stats pro Quelle
+- Zone-Stats pro Map / Zone / Region
+- Zusammenfassung der fehlenden Inhalte pro geographischer Stelle
+
+**Interfaces:**
+
+```lua
+MC.Systems.ZoneAnalyzer:GetZoneStats(recipeDB, characterRecipes)
+MC.Systems.SourceResolver:GetRecipesForSource(sourceID)
+MC.Systems.SourceResolver:GetSource(sourceID)
+```
+
+**Ergebnis:**
+
+```lua
+{
+    [123] = {
+        mapID = 123,
+        totalRecipes = 18,
+        learned = 12,
+        missing = 6,
+        unknown = 0
+    }
+}
+```
+
+---
+
+### 2.6 Datenqualitäts- und Versionsschicht
+
+**Ziel:**
+Sichere, überprüfbare Datensätze auch in späteren Erweiterungen.
+
+**Interface:**
+
+```lua
+MC.Utils.DatabaseVersion:GetVersion()
+MC.Utils.DatabaseVersion:IsOutdated()
+MC.Utils.DataValidator:ValidateDatabase()
+```
+
+**Implementierungsregeln:**
+
+- Version als String oder SemVer-ähnlich
+- DB-Version muss bei Änderungen eskalieren
+- Validierung muss Warnungen oder Fehler griffbereit liefern
+- fehlende/ungültige Daten dürfen nicht stillschweigend in die Engine fließen
+
+---
+
+## 3. Abhängigkeiten zwischen Modulen
+
+Die Modulabhängigkeiten sollen wie folgt sein:
+
+```text
+API Layer
+    ↓
+Database / Runtime State
+    ↓
+Completion Engine
+    ↓
+RoutePlanner / ZoneAnalyzer / SourceResolver / CharacterComparison
+    ↓
+MaterialPlanner / SearchEngine
+    ↓
+UI / Dashboard / Detail Views
+```
+
+Die UI darf niemals in den Datenfluss hinein „überschreiben“; sie konsumiert nur fertige Daten.
+
+---
+
+## 4. Reihenfolge der Implementierung
+
+Die folgenden Schritte sollten in dieser Reihenfolge realisiert werden:
+
+1. RoutePlanner
+2. SearchEngine
+3. MaterialPlanner
+4. CharacterComparison
+5. ZoneAnalyzer / SourceResolver Erweiterung
+6. Detailansichten im UI
+7. Datenqualitäts- und Versionskontrolle
+8. Abschlussvalidierung und Stabilisierung
+
+Diese Reihenfolge hält das Produkt auf eine saubere Architektur mit minimaler Koppelung und ermöglicht eine inkrementelle Validierung.
+
+---
+
+## 5. Akzeptanzkriterien für Phase 3
+
+### AC1 – Route Planning
+- [ ] fehlende Rezepte können in eine vorgeschlagene Sammlung Reihenfolge gebracht werden
+- [ ] die Ausgabe wird als „Suggested Collection Order“ bezeichnet
+- [ ] Map-/Locations-Daten sind als Grundlage definiert
+
+### AC2 – Search
+- [ ] Suche über Rezepte, Items, Quellen, Quest, NPC und Zone ist unterstützt
+- [ ] UI greift nicht direkt auf Index-/Filterlogik zu
+- [ ] SearchEngine ist zentral und wiederverwendbar
+
+### AC3 – Material Planner
+- [ ] mehrere Rezepte können zusammengefasst werden
+- [ ] required / owned / missing werden berechnet
+- [ ] Planung ist UI-unabhängig
+
+### AC4 – Character Comparison
+- [ ] verschiedene Charakterdaten können verglichen werden
+- [ ] Account-/Live-Daten werden nach derselben Logik verarbeitet
+- [ ] Delta-Berechnung funktioniert ohne UI-Abhängigkeiten
+
+### AC5 – Zone / Source Analysis
+- [ ] Fortschritt kann nach Zone aggregiert werden
+- [ ] Quellen können nach Lern-/Fehlstatus bewertet werden
+- [ ] Ergebnisse unterstützen spätere Map-/Dashboard-Ansichten
+
+### AC6 – Data Quality / Versioning
+- [ ] DB-Versionierung ist vorgesehen
+- [ ] fehlerhafte Datensätze werden erkannt und protokolliert
+- [ ] ungültige Daten dürfen nicht stillschweigend akzeptiert werden
+
+---
+
+## 6. Definition of Done für Phase 3
+
+Phase 3 ist abgeschlossen, sobald:
+
+1. RoutePlanner, SearchEngine, MaterialPlanner und CharacterComparison als Module definiert sind;
+2. jede Feature-Logik unabhängig von UI und Blizzard-API arbeitet;
+3. Zone-, Source- und Material-Statistiken auf derselben Basis beruhen;
+4. Datenqualitäts- und Versionslogik mit eingehender Validierung durchlaufen;
+5. die nächste Runde der Implementierung in konkrete Tickets zerlegt werden kann.
+
+Damit ist die Architektur nicht nur dokumentiert, sondern auch in eine klare Entwicklungsroadmap für die Projektebene überführt.
+
+---
+
+## 7. Nächste konkrete Entwicklungstickets
+
+### Ticket 1 – Route Planner
+- fehlende Rezepte zu geographischen Positionen auflösen
+- Suggested Collection Order erzeugen
+- map-agnostische Sortierung implementieren
+
+### Ticket 2 – Search Engine
+- Rezept-/Item-/NPC-/Quest-Index bauen
+- Filter nach Source Type und Zone ermöglichen
+- Suchergebnisse als Datenobjekt zurückgeben
+
+### Ticket 3 – Material Planner
+- Reagenzien zusammenfassen
+- ownedItems integrieren
+- Missing-Wert berechnen
+
+### Ticket 4 – Character Comparison
+- Charakter-Delta berechnen
+- Accountdaten vergleichen
+- Merkmale für UI-Funktionen bereitstellen
+
+### Ticket 5 – Data Quality / Versioning
+- Datenvalidierung als aktiven Check einbauen
+- DB-Versionierung definieren
+- Validierungsprotokolle an Logger binden
+
+Diese Tickets bilden die unmittelbare Übergabe an die Phase-4-Implementierung und sind die nächste logische Stufe nach dem Basis-Scaffold aus Phase 2.
